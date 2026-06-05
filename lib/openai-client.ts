@@ -116,9 +116,25 @@ async function chatCompletionSingleRegion(
     let content = '';
     let finishReason = '';
     let firstChunkReceived = false;
+    let buffer = '';
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+
+    const processLine = (line: string) => {
+      if (!line.startsWith('data: ')) return;
+      const payload = line.slice(6).trim();
+      if (!payload || payload === '[DONE]') return;
+      try {
+        const data = JSON.parse(payload);
+        const delta = data.choices?.[0]?.delta?.content;
+        if (delta) content += delta;
+        const fr = data.choices?.[0]?.finish_reason;
+        if (fr) finishReason = fr;
+      } catch {
+        // Skip malformed SSE lines (only happens if upstream truly broken)
+      }
+    };
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -130,25 +146,17 @@ async function chatCompletionSingleRegion(
         firstChunkReceived = true;
       }
 
-      const text = decoder.decode(value, { stream: true });
-      const lines = text.split('\n');
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const payload = line.slice(6).trim();
-        if (payload === '[DONE]') continue;
-
-        try {
-          const data = JSON.parse(payload);
-          const delta = data.choices?.[0]?.delta?.content;
-          if (delta) content += delta;
-          const fr = data.choices?.[0]?.finish_reason;
-          if (fr) finishReason = fr;
-        } catch {
-          // Skip malformed SSE lines
-        }
-      }
+      // Buffer partial lines — SSE events can span multiple chunks. Without
+      // this, an incomplete `data: {...` fragment gets JSON.parse'd, fails,
+      // and the content delta in that fragment is silently lost.
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) processLine(line);
     }
+
+    // Flush any remaining buffered line
+    if (buffer.length > 0) processLine(buffer);
 
     return { content, finishReason: finishReason || 'stop', region: region.name };
   } catch (err) {
