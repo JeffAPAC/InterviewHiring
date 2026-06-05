@@ -20,16 +20,15 @@ function getTableService(): TableServiceClient {
 
 async function ensureTable(tableName: string): Promise<TableClient> {
   const service = getTableService();
-  const client = service.getTableClient(tableName);
   try {
-    await client.createTable();
+    await service.createTable(tableName);
   } catch (err: unknown) {
     // Table already exists — 409 Conflict is expected
     if (err && typeof err === 'object' && 'statusCode' in err && err.statusCode !== 409) {
       throw err;
     }
   }
-  return client;
+  return TableClient.fromConnectionString(getConnectionString(), tableName);
 }
 
 // ── Evaluations ──────────────────────────────────────────────────────────────
